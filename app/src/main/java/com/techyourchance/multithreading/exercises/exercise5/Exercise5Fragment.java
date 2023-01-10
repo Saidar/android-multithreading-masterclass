@@ -58,19 +58,16 @@ public class Exercise5Fragment extends BaseFragment {
         mTxtReceivedMessagesCount = view.findViewById(R.id.txt_received_messages_count);
         mTxtExecutionTime = view.findViewById(R.id.txt_execution_time);
 
-        mBtnStart.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                mBtnStart.setEnabled(false);
-                mTxtReceivedMessagesCount.setText("");
-                mTxtExecutionTime.setText("");
-                mProgressBar.setVisibility(View.VISIBLE);
+        mBtnStart.setOnClickListener(v -> {
+            mBtnStart.setEnabled(false);
+            mTxtReceivedMessagesCount.setText("");
+            mTxtExecutionTime.setText("");
+            mProgressBar.setVisibility(View.VISIBLE);
 
-                mNumOfReceivedMessages = 0;
-                mNumOfFinishedConsumers = 0;
+            mNumOfReceivedMessages = 0;
+            mNumOfFinishedConsumers = 0;
 
-                startCommunication();
-            }
+            startCommunication();
         });
 
         return view;
@@ -86,85 +83,67 @@ public class Exercise5Fragment extends BaseFragment {
         mStartTimestamp = System.currentTimeMillis();
 
         // watcher-reporter thread
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                synchronized (LOCK) {
-                    while (mNumOfFinishedConsumers < NUM_OF_MESSAGES) {
-                        try {
-                            LOCK.wait();
-                        } catch (InterruptedException e) {
-                            return;
-                        }
+        new Thread(() -> {
+            synchronized (LOCK) {
+                while (mNumOfFinishedConsumers < NUM_OF_MESSAGES) {
+                    try {
+                        LOCK.wait();
+                    } catch (InterruptedException e) {
+                        return;
                     }
                 }
-                showResults();
             }
+            showResults();
         }).start();
 
         // producers init thread
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                for (int i = 0; i < NUM_OF_MESSAGES; i++) {
-                    startNewProducer(i);
-                }
+        new Thread(() -> {
+            for (int i = 0; i < NUM_OF_MESSAGES; i++) {
+                startNewProducer(i);
             }
         }).start();
 
         // consumers init thread
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                for (int i = 0; i < NUM_OF_MESSAGES; i++) {
-                    startNewConsumer();
-                }
+        new Thread(() -> {
+            for (int i = 0; i < NUM_OF_MESSAGES; i++) {
+                startNewConsumer();
             }
         }).start();
     }
 
     private void startNewProducer(final int index) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    Thread.sleep(DefaultConfiguration.DEFAULT_PRODUCER_DELAY_MS);
-                } catch (InterruptedException e) {
-                    return;
-                }
-                mBlockingQueue.put(index);
+        new Thread(() -> {
+            try {
+                Thread.sleep(DefaultConfiguration.DEFAULT_PRODUCER_DELAY_MS);
+            } catch (InterruptedException e) {
+                return;
             }
+            mBlockingQueue.put(index);
         }).start();
     }
 
     private void startNewConsumer() {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                int message = mBlockingQueue.take();
-                synchronized (LOCK) {
-                    if (message != -1) {
-                        mNumOfReceivedMessages++;
-                    }
-                    mNumOfFinishedConsumers++;
-                    LOCK.notifyAll();
+        new Thread(() -> {
+            int message = mBlockingQueue.take();
+            synchronized (LOCK) {
+                if (message != -1) {
+                    mNumOfReceivedMessages++;
                 }
+                mNumOfFinishedConsumers++;
+                LOCK.notifyAll();
             }
         }).start();
     }
 
     private void showResults() {
-        mUiHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                mProgressBar.setVisibility(View.INVISIBLE);
-                mBtnStart.setEnabled(true);
-                synchronized (LOCK) {
-                    mTxtReceivedMessagesCount.setText("Received messages: " + mNumOfReceivedMessages);
-                }
-                long executionTimeMs = System.currentTimeMillis() - mStartTimestamp;
-                mTxtExecutionTime.setText("Execution time: " + executionTimeMs + "ms");
+        mUiHandler.post(() -> {
+            mProgressBar.setVisibility(View.INVISIBLE);
+            mBtnStart.setEnabled(true);
+            synchronized (LOCK) {
+                mTxtReceivedMessagesCount.setText("Received messages: " + mNumOfReceivedMessages);
             }
+            long executionTimeMs = System.currentTimeMillis() - mStartTimestamp;
+            mTxtExecutionTime.setText("Execution time: " + executionTimeMs + "ms");
         });
     }
 
@@ -172,6 +151,8 @@ public class Exercise5Fragment extends BaseFragment {
      * Simplified implementation of blocking queue.
      */
     private static class MyBlockingQueue {
+
+        private final Object LOCK_PUT = new Object();
 
         private final int mCapacity;
         private final Queue<Integer> mQueue = new LinkedList<>();
@@ -189,9 +170,18 @@ public class Exercise5Fragment extends BaseFragment {
          * @param number the element to add
          */
         public void put(int number) {
-            if (mCurrentSize < mCapacity) {
+            synchronized (LOCK_PUT) {
+                while(mCurrentSize >= mCapacity) {
+                    try {
+                        LOCK_PUT.wait();
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
                 mQueue.offer(number);
                 mCurrentSize++;
+
+                LOCK_PUT.notifyAll();
             }
         }
 
@@ -202,15 +192,19 @@ public class Exercise5Fragment extends BaseFragment {
          * @return the head of this queue
          */
         public int take() {
-            if (mCurrentSize > 0) {
-                mCurrentSize--;
-                Integer message = mQueue.poll();
-                if (message != null) {
-                    return message;
+            synchronized (LOCK_PUT) {
+                while (mCurrentSize <= 0) {
+                    try {
+                        LOCK_PUT.wait();
+                    } catch (InterruptedException e) {
+                        return 0;
+                    }
                 }
-            }
 
-            return -1;
+                mCurrentSize--;
+                LOCK_PUT.notifyAll();
+                return mQueue.poll();
+            }
         }
     }
 }
